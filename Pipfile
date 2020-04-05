@@ -6,7 +6,9 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-psycopg2 = "*"
+psycopg2 = "==2.7.7"
+pandas = "*"
+ipython-sql = "*"
 
 [requires]
 python_version = "3.6"
