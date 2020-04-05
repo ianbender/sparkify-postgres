@@ -6,81 +6,90 @@ import numpy as np
 from sql_queries import *
 
 
-def process_song_file(cur, filepath):
-    # open song file
+def open_and_clean_file(filepath):
+    # open file
     df = pd.read_json(filepath, lines=True)
-    df = clean_blank_values(df)
 
-    # insert song record
-    song_data = list(
-        df[['song_id',
-            'title',
-            'artist_id',
-            'year',
-            'duration']].values[0]
-    )
-    cur.execute(song_table_insert, song_data)
-
-    # insert artist record
-    artist_data = list(
-        df[['artist_id',
-            'artist_name',
-            'artist_location',
-            'artist_latitude',
-            'artist_longitude']].values[0]
-    )
-    cur.execute(artist_table_insert, artist_data)
-
-
-def clean_blank_values(df):
     # Replace NaN and empty strings with None values for DB insertion
     df = df.replace(r'^\s*$', np.NaN, regex=True)
     df = df.where(df.notnull(), None)
     return df
 
-def process_log_file(cur, filepath):
-    # open log file
-    df = pd.read_json(filepath, lines=True)
-    df = clean_blank_values(df)
 
-    # filter by NextSong action
-    df = df[(df.page == 'NextSong')]
+def insert_song_data(cur, df):
+    song_data = list(df[['song_id','title','artist_id',
+                         'year','duration']].values[0])
+    cur.execute(song_table_insert, song_data)
 
+
+def insert_artist_data(cur, df):
+    artist_data = list(df[['artist_id','artist_name','artist_location',
+                           'artist_latitude','artist_longitude']].values[0])
+    cur.execute(artist_table_insert, artist_data)
+
+
+def insert_time_data(cur, df):
     # convert timestamp column to datetime
     t = pd.to_datetime(df['ts'], unit='ms')
 
-    # insert time data records
     # `// 10**6` converts from nanoseconds back to microseconds
-    time_data = (t.astype('int64') // 10**6, t.dt.hour, t.dt.day, t.dt.week, t.dt.month, t.dt.year, t.dt.weekday)
-    column_labels = ('timestamp', 'hour', 'day', 'week', 'month', 'year', 'weekday')
+    time_data = (t.astype('int64') // 10**6, t.dt.hour, t.dt.day, t.dt.week,
+                 t.dt.month, t.dt.year, t.dt.weekday)
+
+    column_labels = ('timestamp', 'hour', 'day', 'week',
+                     'month', 'year', 'weekday')
+
     time_df = pd.DataFrame(dict(zip(column_labels, time_data)))
 
+    # insert time data records
     for i, row in time_df.iterrows():
         cur.execute(time_table_insert, list(row))
 
-    # load user table
+
+def insert_user_data(cur, df):
     user_df = df[['userId', 'firstName', 'lastName', 'gender', 'level']]
 
     # insert user records
     for i, row in user_df.iterrows():
         cur.execute(user_table_insert, row)
 
-    # insert songplay records
+
+def select_song_and_artist(cur, row):
+    # get songid and artistid from song and artist tables
+    cur.execute(song_select, (row.song, row.artist, row.length))
+    results = cur.fetchone()
+
+    # Result set will be (songid, artistid)
+    return results or (None, None)
+
+
+def insert_songplay_data(cur, df):
     for index, row in df.iterrows():
-
-        # get songid and artistid from song and artist tables
-        print((row.song, row.artist, row.length))
-        cur.execute(song_select, (row.song, row.artist, row.length))
-        results = cur.fetchone()
-
-        if results:
-            songid, artistid = results
-        else:
-            songid, artistid = None, None
+        songid, artistid = select_song_and_artist(cur, row)
 
         # insert songplay record
-        songplay_data = (row.ts, row.userId, row.level, songid, artistid, row.sessionId, row.location, row.userAgent)
+        songplay_data = (row.ts, row.userId, row.level, songid, artistid,
+                         row.sessionId, row.location, row.userAgent)
         cur.execute(songplay_table_insert, songplay_data)
+
+
+def process_song_file(cur, filepath):
+    # open song file
+    df = open_and_clean_file(filepath)
+
+    insert_song_data(cur, df)
+    insert_artist_data(cur, df)
+
+
+def process_log_file(cur, filepath):
+    # open log file
+    df = open_and_clean_file(filepath)
+    # filter by NextSong action
+    df = df[(df.page == 'NextSong')]
+
+    insert_time_data(cur, df)
+    insert_user_data(cur, df)
+    insert_songplay_data(cur, df)
 
 
 def process_data(cur, conn, filepath, func):
